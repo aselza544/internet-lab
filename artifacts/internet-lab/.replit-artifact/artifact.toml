@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Internet Lab"
+description = "A secure web gateway workspace for opening public websites through a protected server-side fetch layer with visible security and response metadata."
+version = "1.0.0"
+id = "artifacts/internet-lab"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25566
+
+[services.development]
+run = "pnpm --filter @workspace/internet-lab run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/internet-lab", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/internet-lab/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25566"
+BASE_PATH = "/"

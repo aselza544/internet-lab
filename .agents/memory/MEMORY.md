@@ -1,0 +1,1 @@
+- [Pinned DNS lookup callbacks](gateway-dns-pinning.md) — custom Node HTTP lookups must return an array when called with `options.all=true`.

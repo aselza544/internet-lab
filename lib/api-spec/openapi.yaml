@@ -3,13 +3,17 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Internet Lab secure web gateway API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: gateway
+    description: Secure gateway operations
+  - name: dashboard
+    description: Dashboard summary operations
 paths:
   /healthz:
     get:
@@ -24,6 +28,109 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /gateway/status:
+    get:
+      operationId: getGatewayStatus
+      tags: [gateway]
+      summary: Get gateway status
+      description: Returns the current gateway and policy configuration status.
+      responses:
+        "200":
+          description: Gateway status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayStatus"
+  /gateway/sessions:
+    post:
+      operationId: createGatewaySession
+      tags: [gateway]
+      summary: Create a gateway session
+      description: Creates a short-lived development session when authentication is not configured.
+      responses:
+        "201":
+          description: Gateway session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewaySession"
+        "503":
+          description: Authentication provider is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /gateway/fetch:
+    post:
+      operationId: fetchThroughGateway
+      tags: [gateway]
+      summary: Fetch a public URL through the gateway
+      description: Fetches a public HTTP or HTTPS URL after policy, DNS, and destination validation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayFetchInput"
+      responses:
+        "200":
+          description: Gateway response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayFetchResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Gateway session is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: URL blocked by security policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyBlockResponse"
+        "502":
+          description: Upstream fetch failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /gateway/requests:
+    get:
+      operationId: listGatewayRequests
+      tags: [gateway]
+      summary: List recent gateway requests
+      description: Returns safe metadata for recent requests in the current development session.
+      responses:
+        "200":
+          description: Recent requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GatewayRequestSummary"
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get dashboard summary
+      description: Returns the safe operational summary shown in the Internet Lab dashboard.
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +140,174 @@ components:
           type: string
       required:
         - status
-
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+      required: [error]
+    GatewayStatus:
+      type: object
+      properties:
+        gateway:
+          type: string
+          enum: [connected, unavailable]
+        network:
+          type: string
+          enum: [private, unknown]
+        session:
+          type: string
+          enum: [active, required]
+        mode:
+          type: string
+          enum: [development, authenticated]
+        policy:
+          type: string
+          enum: [enforced]
+        limits:
+          $ref: "#/components/schemas/ResourceLimits"
+      required: [gateway, network, session, mode, policy, limits]
+    ResourceLimits:
+      type: object
+      properties:
+        timeoutMs:
+          type: integer
+        maxResponseBytes:
+          type: integer
+        maxRedirects:
+          type: integer
+        maxConcurrentSessions:
+          type: integer
+      required:
+        [timeoutMs, maxResponseBytes, maxRedirects, maxConcurrentSessions]
+    GatewaySession:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        mode:
+          type: string
+          enum: [development, authenticated]
+      required: [sessionId, expiresAt, mode]
+    GatewayFetchInput:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          minLength: 1
+      required: [url]
+    GatewayFetchResponse:
+      type: object
+      properties:
+        url:
+          type: string
+        protocol:
+          type: string
+        hostname:
+          type: string
+        statusCode:
+          type: integer
+        responseTimeMs:
+          type: integer
+        contentType:
+          type: string
+        responseSize:
+          type: integer
+        truncated:
+          type: boolean
+        preview:
+          type: string
+        redirectCount:
+          type: integer
+        securityDecision:
+          type: string
+          enum: [allowed]
+      required:
+        - url
+        - protocol
+        - hostname
+        - statusCode
+        - responseTimeMs
+        - contentType
+        - responseSize
+        - truncated
+        - preview
+        - redirectCount
+        - securityDecision
+    PolicyBlockResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        policy:
+          type: string
+        message:
+          type: string
+      required: [error, code, policy, message]
+    GatewayRequestSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        hostname:
+          type: string
+        status:
+          type: string
+          enum: [allowed, blocked, failed]
+        statusCode:
+          type: ["integer", "null"]
+        durationMs:
+          type: integer
+        responseSize:
+          type: integer
+        securityDecision:
+          type: string
+      required:
+        [
+          id,
+          timestamp,
+          hostname,
+          status,
+          statusCode,
+          durationMs,
+          responseSize,
+          securityDecision,
+        ]
+    DashboardSummary:
+      type: object
+      properties:
+        activeSessions:
+          type: integer
+        requestsToday:
+          type: integer
+        blockedRequests:
+          type: integer
+        bandwidthBytes:
+          type: integer
+        protection:
+          type: string
+          enum: [enforced]
+        recentRequests:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayRequestSummary"
+      required:
+        [
+          activeSessions,
+          requestsToday,
+          blockedRequests,
+          bandwidthBytes,
+          protection,
+          recentRequests,
+        ]

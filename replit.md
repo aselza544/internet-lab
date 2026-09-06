@@ -1,6 +1,6 @@
-# [Project name]
+# Internet Lab
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Internet Lab is a secure web gateway workspace for inspecting public URLs through a protected server-side fetch layer.
 
 ## Run & Operate
 
@@ -10,6 +10,7 @@ _Replace the heading above with the project's name, and this line with one sente
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm --filter @workspace/api-server run test` — run gateway security tests
 
 ## Stack
 
@@ -22,23 +23,32 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/internet-lab` — responsive React/Vite dashboard and Web workspace
+- `artifacts/api-server/src/lib/security.ts` — URL, DNS, IP, and SSRF validation
+- `artifacts/api-server/src/lib/policy.ts` — configurable protected-service policy engine
+- `artifacts/api-server/src/routes/gateway.ts` — session, status, fetch, and request ledger routes
+- `lib/api-spec/openapi.yaml` — source of truth for gateway API contracts
+- `lib/db/src/schema/internet-lab.ts` — configurable users, plans, sessions, usage, files, messages, policy, and gateway request tables
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The gateway pins each DNS-resolved public address through the outbound request's lookup callback to reduce DNS-rebinding risk.
+- Development sessions are signed with `SESSION_SECRET`; session creation is disabled outside development until a real auth provider is configured.
+- Third-party responses are returned as bounded text metadata and are never rendered as HTML inside the Internet Lab origin.
+- Security logs store only session ID, hostname, decision, duration, and response size; request credentials, cookies, and bodies are not logged.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+The app currently provides the Web workspace, live gateway/security status, URL inspection through the server, safe text previews, recent request metadata, protection settings, and planned-module placeholders for Messages, Video, Files, APIs, Servers, and Network.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+The current build is intentionally limited to the secure Web Gateway foundation; payments, full content rendering, cloud scaling, and the other modules are deferred.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- Run API codegen after changing `lib/api-spec/openapi.yaml`.
+- The API workflow must run in development mode for the demo session flow; production requires a configured authentication provider.
 
 ## Pointers
 
