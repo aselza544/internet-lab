@@ -1,0 +1,77 @@
+import { FormEvent, useState } from 'react';
+import { Globe2, LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
+
+export default function WebViewer() {
+  const [url, setUrl] = useState('https://example.com');
+  const [frameUrl, setFrameUrl] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function ensureSession() {
+    const response = await fetch('/api/gateway/sessions', { method: 'POST', credentials: 'include' });
+    if (!response.ok && response.status !== 429) throw new Error('Gateway session could not be started.');
+  }
+
+  async function openSite(event: FormEvent) {
+    event.preventDefault();
+    setError('');
+    setFrameUrl('');
+    let parsed: URL;
+    try {
+      parsed = new URL(url.trim());
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only HTTP and HTTPS websites are supported.');
+      if (parsed.username || parsed.password) throw new Error('URLs containing credentials are not allowed.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Enter a valid website URL.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await ensureSession();
+      setFrameUrl(`/api/web/page?url=${encodeURIComponent(parsed.toString())}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The protected web gateway is unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main style={{ minHeight: '100%', padding: 32 }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 24, marginBottom: 24 }}>
+          <div>
+            <div style={{ fontSize: 12, letterSpacing: '.08em', textTransform: 'uppercase', opacity: .65 }}>Protected web workspace</div>
+            <h1 style={{ fontSize: 34, margin: '8px 0' }}>Open a website through Internet Lab</h1>
+            <p style={{ maxWidth: 720, opacity: .72, margin: 0 }}>The server fetches the page and its public resources. The browser displays only the protected internal proxy URL.</p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: .75 }}><ShieldCheck size={16} /> Gateway protected</div>
+        </div>
+
+        <section style={{ border: '1px solid hsl(var(--border))', borderRadius: 14, padding: 18, background: 'hsl(var(--card))' }}>
+          <form onSubmit={openSite} style={{ display: 'flex', gap: 10 }}>
+            <div style={{ flex: 1, position: 'relative' }}>
+              <Globe2 size={16} style={{ position: 'absolute', left: 13, top: 14, opacity: .55 }} />
+              <input value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Website URL" placeholder="https://example.com" style={{ width: '100%', height: 44, boxSizing: 'border-box', padding: '0 14px 0 38px', borderRadius: 9, border: '1px solid hsl(var(--border))', background: 'hsl(var(--background))', color: 'inherit' }} />
+            </div>
+            <button type="submit" disabled={loading || !url.trim()} style={{ height: 44, padding: '0 18px', border: 0, borderRadius: 9, background: 'hsl(var(--primary))', color: 'hsl(var(--primary-foreground))', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              {loading ? <RefreshCw size={15} className="animate-spin" /> : <Globe2 size={15} />} Open
+            </button>
+          </form>
+          {error && <div role="alert" style={{ marginTop: 10, color: 'hsl(var(--destructive))', fontSize: 13 }}>{error}</div>}
+          <div style={{ marginTop: 12, display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, opacity: .65 }}><LockKeyhole size={13} /> External credentials, cookies, forms, popups and direct browser connections are not forwarded.</div>
+        </section>
+
+        <section style={{ marginTop: 18, border: '1px solid hsl(var(--border))', borderRadius: 14, overflow: 'hidden', background: 'white', minHeight: 620 }} aria-label="Protected website viewer">
+          {frameUrl ? (
+            <iframe title="Protected website" src={frameUrl} sandbox="allow-same-origin" referrerPolicy="no-referrer" style={{ width: '100%', height: 720, border: 0, display: 'block' }} />
+          ) : (
+            <div style={{ minHeight: 620, display: 'grid', placeItems: 'center', padding: 32, textAlign: 'center', opacity: .65 }}>
+              <div><ShieldCheck size={34} /><h2 style={{ margin: '12px 0 6px' }}>Ready</h2><p style={{ margin: 0 }}>Enter a public website above and press Open.</p></div>
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
