@@ -70,12 +70,12 @@ function proxyUrl(raw: string, base: string): string | null {
     return `/api/web/resource?url=${encodeURIComponent(value.toString())}`;
   } catch { return null; }
 }
-function rewriteCss(css: string, base: string): string {
+export function rewriteCss(css: string, base: string): string {
   return css.replace(/url\(\s*([\"']?)([^\"')]+)\1\s*\)/gi, (full, quote, value) => {
     const proxied = proxyUrl(value, base); return proxied ? `url(${quote}${proxied}${quote})` : "url()";
   });
 }
-function rewriteHtml(html: string, base: string): string {
+export function rewriteHtml(html: string, base: string): string {
   let output = html.replace(/<base[^>]*>/gi, "");
   output = output.replace(/\s(on[a-z]+)\s*=\s*([\"'])[^\"']*\2/gi, "");
   output = output.replace(/\s(src|href|action|poster|cite)\s*=\s*([\"'])(.*?)\2/gi, (full, attr, quote, value) => {
@@ -90,7 +90,7 @@ function rewriteHtml(html: string, base: string): string {
     return ` ${attr}=${quote}${rewritten}${quote}`;
   });
   output = output.replace(/<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy[\"']?[^>]*>/gi, "");
-  const csp = "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none';";
+  const csp = "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'none'; media-src 'self' blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none';";
   return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}">${output}`;
 }
 async function serve(req: Request, res: Response): Promise<void> {
