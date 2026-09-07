@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rewriteCss, rewriteHtml } from "../src/routes/web.ts";
+import { rewriteCss, rewriteHtml } from "../routes/web.ts";
 
 test("rewrites HTML resources to the internal proxy", () => {
   const html = '<img src="https://example.com/a.png"><link href="/site.css"><a href="/next">Next</a>';
