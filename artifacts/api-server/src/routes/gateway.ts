@@ -1,7 +1,4 @@
 import crypto from "node:crypto";
-import http from "node:http";
-import https from "node:https";
-import type { IncomingMessage } from "node:http";
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
   FetchThroughGatewayBody,
@@ -10,10 +7,14 @@ import {
   ListGatewayRequestsResponse,
 } from "@workspace/api-zod";
 import { logger } from "../lib/logger";
-import { gatewayConfig, planLimits } from "../lib/gateway-config";
+import { readUpstream } from "../lib/gateway-upstream.ts";
 import {
-  assertResponseWithinLimit,
-  createUpstreamTimeoutError,
+  gatewayConfig,
+  planLimits,
+  type GatewayPlan,
+} from "../lib/gateway-config";
+import {
+  createBandwidthLimitError,
   resolveRedirectTarget,
   safeLogDomain,
 } from "../lib/gateway-guards";
@@ -21,9 +22,12 @@ import { evaluatePolicy } from "../lib/policy";
 import { GatewaySecurityError, validatePublicTarget } from "../lib/security";
 import {
   getDashboardSummary,
+  getSessionLimits,
   getRecentGatewayRequests,
   recordGatewayRequest,
   registerSession,
+  reserveSessionBandwidth,
+  settleSessionBandwidth,
 } from "../lib/gateway-store";
 
 const router: IRouter = Router();
@@ -52,7 +56,22 @@ function sign(value: string): string {
   return crypto.createHmac("sha256", secret).update(value).digest("base64url");
 }
 
-function createSessionToken(): {
+type SessionClaims = {
+  sessionId: string;
+  expiresAt: string;
+  plan: GatewayPlan;
+};
+
+type GatewaySession = {
+  sessionId: string;
+  plan: GatewayPlan;
+  maxResponseBytes: number;
+  maxConcurrentSessions: number;
+  bandwidthBytes: number;
+  remainingBandwidthBytes: number;
+};
+
+function createSessionToken(plan: GatewayPlan): {
   token: string;
   expiresAt: Date;
   sessionId: string;
@@ -60,7 +79,7 @@ function createSessionToken(): {
   const sessionId = crypto.randomUUID();
   const expiresAt = new Date(now() + gatewayConfig.idleSessionTimeoutMs);
   const payload = Buffer.from(
-    JSON.stringify({ sessionId, expiresAt: expiresAt.toISOString() }),
+    JSON.stringify({ sessionId, expiresAt: expiresAt.toISOString(), plan }),
   ).toString("base64url");
   return { token: `${payload}.${sign(payload)}`, expiresAt, sessionId };
 }
@@ -70,7 +89,7 @@ function getSessionToken(req: Request): string | null {
   return headerValue ?? req.cookies?.[SESSION_COOKIE] ?? null;
 }
 
-function verifySession(req: Request): string | null {
+function verifySession(req: Request): SessionClaims | null {
   if (process.env.NODE_ENV !== "development") return null;
   const token = getSessionToken(req);
   if (!token) return null;
@@ -88,24 +107,29 @@ function verifySession(req: Request): string | null {
   }
 
   try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString()) as {
-      sessionId?: string;
-      expiresAt?: string;
-    };
+    const parsed = JSON.parse(
+      Buffer.from(payload, "base64url").toString(),
+    ) as Partial<SessionClaims>;
     if (
       !parsed.sessionId ||
       !parsed.expiresAt ||
+      !parsed.plan ||
+      !Object.hasOwn(planLimits, parsed.plan) ||
       new Date(parsed.expiresAt).getTime() <= now()
     ) {
       return null;
     }
-    return parsed.sessionId;
+    return {
+      sessionId: parsed.sessionId,
+      expiresAt: parsed.expiresAt,
+      plan: parsed.plan,
+    };
   } catch {
     return null;
   }
 }
 
-function requireSession(req: Request, res: Response): string | null {
+function requireSession(req: Request, res: Response): GatewaySession | null {
   if (!signingSecret()) {
     jsonError(
       res,
@@ -116,8 +140,9 @@ function requireSession(req: Request, res: Response): string | null {
     return null;
   }
 
-  const sessionId = verifySession(req);
-  if (!sessionId) {
+  const claims = verifySession(req);
+  const limits = claims ? getSessionLimits(claims.sessionId) : null;
+  if (!claims || !limits || limits.plan !== claims.plan) {
     jsonError(
       res,
       401,
@@ -126,7 +151,14 @@ function requireSession(req: Request, res: Response): string | null {
     );
     return null;
   }
-  return sessionId;
+  return {
+    sessionId: claims.sessionId,
+    plan: limits.plan,
+    maxResponseBytes: limits.maxResponseBytes,
+    maxConcurrentSessions: limits.maxConcurrentSessions,
+    bandwidthBytes: limits.bandwidthBytes,
+    remainingBandwidthBytes: limits.remainingBandwidthBytes,
+  };
 }
 
 function rateLimit(sessionId: string): boolean {
@@ -147,88 +179,14 @@ function isRedirect(statusCode: number): boolean {
   return [301, 302, 303, 307, 308].includes(statusCode);
 }
 
-function readUpstream(
-  target: Awaited<ReturnType<typeof validatePublicTarget>>,
-): Promise<{
-  statusCode: number;
-  headers: IncomingMessage["headers"];
-  body: Buffer;
-}> {
-  const transport = target.url.protocol === "https:" ? https : http;
-
-  return new Promise((resolve, reject) => {
-    const request = transport.request(
-      {
-        protocol: target.url.protocol,
-        hostname: target.url.hostname,
-        port: target.url.port || (target.url.protocol === "https:" ? 443 : 80),
-        path: `${target.url.pathname || "/"}${target.url.search}`,
-        method: "GET",
-        headers: {
-          accept:
-            "text/html, text/plain, application/json, application/xml;q=0.9, */*;q=0.1",
-          "user-agent": "Internet-Lab-Gateway/0.1",
-        },
-        lookup: (
-          _hostname: string,
-          options: { all?: boolean },
-          callback: (
-            error: NodeJS.ErrnoException | null,
-            address: string | Array<{ address: string; family: number }>,
-            family?: number,
-          ) => void,
-        ) => {
-          if (options.all) {
-            callback(null, [
-              { address: target.address, family: target.family },
-            ]);
-            return;
-          }
-          callback(null, target.address, target.family);
-        },
-        ...(target.url.protocol === "https:"
-          ? { servername: target.url.hostname }
-          : {}),
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        let total = 0;
-
-        response.on("data", (chunk: Buffer) => {
-          total += chunk.length;
-          try {
-            assertResponseWithinLimit(total, gatewayConfig.maxResponseBytes);
-          } catch (error) {
-            request.destroy(
-              error instanceof Error
-                ? error
-                : new Error("Response size limit exceeded"),
-            );
-            return;
-          }
-          chunks.push(Buffer.from(chunk));
-        });
-        response.on("end", () =>
-          resolve({
-            statusCode: response.statusCode ?? 502,
-            headers: response.headers,
-            body: Buffer.concat(chunks),
-          }),
-        );
-      },
-    );
-
-    request.setTimeout(gatewayConfig.timeoutMs, () => {
-      request.destroy(createUpstreamTimeoutError());
-    });
-    request.on("error", reject);
-    request.end();
-  });
-}
-
-async function fetchWithValidatedRedirects(rawUrl: string) {
+async function fetchWithValidatedRedirects(
+  rawUrl: string,
+  maxResponseBytes = gatewayConfig.maxResponseBytes,
+  requestByteBudget = maxResponseBytes,
+) {
   let currentUrl = rawUrl;
   let redirectCount = 0;
+  let bytesUsed = 0;
 
   while (true) {
     const target = await validatePublicTarget(currentUrl);
@@ -241,7 +199,16 @@ async function fetchWithValidatedRedirects(rawUrl: string) {
       );
     }
 
-    const upstream = await readUpstream(target);
+    const remainingBudget = requestByteBudget - bytesUsed;
+    if (remainingBudget <= 0) {
+      throw createBandwidthLimitError();
+    }
+
+    const upstream = await readUpstream(
+      target,
+      Math.min(maxResponseBytes, remainingBudget),
+    );
+    bytesUsed += upstream.body.length;
     const location = upstream.headers.location;
     if (isRedirect(upstream.statusCode) && location) {
       currentUrl = resolveRedirectTarget(
@@ -254,7 +221,7 @@ async function fetchWithValidatedRedirects(rawUrl: string) {
       continue;
     }
 
-    return { target, upstream, redirectCount };
+    return { target, upstream, redirectCount, bytesUsed };
   }
 }
 
@@ -271,6 +238,7 @@ function contentPreview(contentType: string, body: Buffer): string {
 }
 
 router.get("/gateway/status", (_req, res) => {
+  const plan = gatewayConfig.defaultPlan;
   const data = GetGatewayStatusResponse.parse({
     gateway: "connected",
     network: "private",
@@ -280,15 +248,15 @@ router.get("/gateway/status", (_req, res) => {
     policy: "enforced",
     limits: {
       timeoutMs: gatewayConfig.timeoutMs,
-      maxResponseBytes: planLimits.FREE.maxResponseBytes,
+      maxResponseBytes: planLimits[plan].maxResponseBytes,
       maxRedirects: gatewayConfig.maxRedirects,
-      maxConcurrentSessions: gatewayConfig.maxConcurrentSessions,
+      maxConcurrentSessions: planLimits[plan].maxConcurrentSessions,
     },
   });
   res.json(data);
 });
 
-router.post("/gateway/sessions", (req, res) => {
+router.post("/gateway/sessions", (_req, res) => {
   if (process.env.NODE_ENV !== "development") {
     jsonError(
       res,
@@ -300,8 +268,19 @@ router.post("/gateway/sessions", (req, res) => {
   }
 
   try {
-    const session = createSessionToken();
-    registerSession(session.sessionId);
+    const plan = gatewayConfig.defaultPlan;
+    const session = createSessionToken(plan);
+    if (
+      !registerSession(session.sessionId, plan, session.expiresAt.getTime())
+    ) {
+      jsonError(
+        res,
+        429,
+        "This plan has reached its concurrent session limit.",
+        "CONCURRENT_SESSION_LIMIT",
+      );
+      return;
+    }
     res.cookie(SESSION_COOKIE, session.token, {
       httpOnly: true,
       sameSite: "lax",
@@ -312,6 +291,7 @@ router.post("/gateway/sessions", (req, res) => {
     res.status(201).json({
       sessionId: session.sessionId,
       expiresAt: session.expiresAt.toISOString(),
+      plan,
       mode: "development",
     });
   } catch {
@@ -325,7 +305,8 @@ router.post("/gateway/sessions", (req, res) => {
 });
 
 router.get("/gateway/requests", (req, res) => {
-  if (!verifySession(req)) {
+  const claims = verifySession(req);
+  if (!claims || !getSessionLimits(claims.sessionId)) {
     res.json(ListGatewayRequestsResponse.parse([]));
     return;
   }
@@ -337,9 +318,9 @@ router.get("/dashboard/summary", (_req, res) => {
 });
 
 router.post("/gateway/fetch", async (req, res) => {
-  const sessionId = requireSession(req, res);
-  if (!sessionId) return;
-  if (!rateLimit(sessionId)) {
+  const session = requireSession(req, res);
+  if (!session) return;
+  if (!rateLimit(session.sessionId)) {
     jsonError(
       res,
       429,
@@ -362,8 +343,30 @@ router.post("/gateway/fetch", async (req, res) => {
 
   const startedAt = now();
   let hostname = safeLogDomain(parsed.data.url);
+  const bandwidthReservation = reserveSessionBandwidth(session.sessionId);
+  if (bandwidthReservation === null) {
+    jsonError(
+      res,
+      429,
+      "This plan has reached its bandwidth limit.",
+      "BANDWIDTH_LIMIT",
+    );
+    return;
+  }
+  let bandwidthSettled = false;
+
   try {
-    const result = await fetchWithValidatedRedirects(parsed.data.url);
+    const result = await fetchWithValidatedRedirects(
+      parsed.data.url,
+      session.maxResponseBytes,
+      bandwidthReservation,
+    );
+    settleSessionBandwidth(
+      session.sessionId,
+      bandwidthReservation,
+      result.bytesUsed,
+    );
+    bandwidthSettled = true;
     const contentType =
       result.upstream.headers["content-type"]?.split(";", 1)[0] ??
       "application/octet-stream";
@@ -394,7 +397,7 @@ router.post("/gateway/fetch", async (req, res) => {
     });
     logger.info(
       {
-        sessionId,
+        sessionId: session.sessionId,
         domain: result.target.url.hostname,
         status: "allowed",
         durationMs: data.responseTimeMs,
@@ -405,6 +408,9 @@ router.post("/gateway/fetch", async (req, res) => {
     );
     res.json(data);
   } catch (error) {
+    if (!bandwidthSettled) {
+      settleSessionBandwidth(session.sessionId, bandwidthReservation, 0);
+    }
     const durationMs = now() - startedAt;
     const status = error instanceof GatewaySecurityError ? error.status : 502;
     const code =
@@ -427,7 +433,7 @@ router.post("/gateway/fetch", async (req, res) => {
     });
     logger.warn(
       {
-        sessionId,
+        sessionId: session.sessionId,
         domain: hostname,
         status: isBlocked ? "blocked" : "failed",
         durationMs,

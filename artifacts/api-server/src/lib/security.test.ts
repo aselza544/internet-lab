@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
+import { planLimits } from "./gateway-config.ts";
 import { evaluatePolicy } from "./policy.ts";
 import {
   assertResponseWithinLimit,
@@ -10,8 +12,15 @@ import {
 import {
   GatewaySecurityError,
   isBlockedIp,
+  resolveHostname,
   validatePublicTarget,
 } from "./security.ts";
+import {
+  getSessionLimits,
+  registerSession,
+  reserveSessionBandwidth,
+  settleSessionBandwidth,
+} from "./gateway-store.ts";
 
 test("allows public HTTP and HTTPS URLs", async () => {
   const httpsTarget = await validatePublicTarget("https://example.com");
@@ -59,6 +68,74 @@ test("rejects localhost, metadata, private IPv4, and loopback IPv6", async () =>
         error.code === "PRIVATE_DESTINATION",
     );
   }
+});
+
+test("rejects IPv4 and IPv6 special-use ranges while allowing public IPv6", () => {
+  for (const address of [
+    "0.0.0.1",
+    "127.42.1.1",
+    "172.16.10.20",
+    "fc00::1",
+    "fd12:3456::1",
+    "fe80::1",
+    "ff02::1",
+    "100::1",
+    "2001:0::1",
+    "2001:2::1",
+    "2001:10::1",
+    "2001:20::1",
+    "2001:db8::1",
+    "2002:c000:0201::1",
+    "3fff::1",
+    "64:ff9b::c000:0201",
+    "::ffff:127.0.0.1",
+  ]) {
+    assert.equal(isBlockedIp(address), true, address);
+  }
+
+  assert.equal(isBlockedIp("2001:4860:4860::8888"), false);
+  assert.equal(isBlockedIp("::ffff:8.8.8.8"), false);
+});
+
+test("DNS resolution stops after the configured timeout", async () => {
+  await assert.rejects(
+    resolveHostname(
+      "slow.example",
+      10,
+      async () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () => resolve([{ address: "203.0.113.10", family: 4 }]),
+            50,
+          );
+        }),
+    ),
+    (error: unknown) =>
+      error instanceof GatewaySecurityError && error.code === "DNS_TIMEOUT",
+  );
+});
+
+test("binds plan limits to sessions and rejects over-limit sessions and bandwidth", () => {
+  const firstSession = crypto.randomUUID();
+  const secondSession = crypto.randomUUID();
+  const expiresAt = Date.now() + 60_000;
+
+  assert.equal(registerSession(firstSession, "FREE", expiresAt), true);
+  assert.equal(registerSession(secondSession, "FREE", expiresAt), false);
+
+  const limits = getSessionLimits(firstSession);
+  assert.equal(limits?.maxResponseBytes, planLimits.FREE.maxResponseBytes);
+  assert.equal(
+    limits?.maxConcurrentSessions,
+    planLimits.FREE.maxConcurrentSessions,
+  );
+
+  for (let index = 0; index < 25; index += 1) {
+    const reservation = reserveSessionBandwidth(firstSession);
+    assert.equal(reservation, planLimits.FREE.maxResponseBytes);
+    settleSessionBandwidth(firstSession, reservation, reservation);
+  }
+  assert.equal(reserveSessionBandwidth(firstSession), null);
 });
 
 test("blocks protected WhatsApp domains with the privacy message", () => {

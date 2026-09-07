@@ -1,1 +1,2 @@
 - [Pinned DNS lookup callbacks](gateway-dns-pinning.md) — custom Node HTTP lookups must return an array when called with `options.all=true`.
+- [Gateway plan enforcement](gateway-plan-enforcement.md) — bind signed sessions to trusted server-side plans; never accept a client-selected plan.

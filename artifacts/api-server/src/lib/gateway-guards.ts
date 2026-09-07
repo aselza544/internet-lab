@@ -37,6 +37,14 @@ export function createUpstreamTimeoutError(): GatewaySecurityError {
   );
 }
 
+export function createBandwidthLimitError(): GatewaySecurityError {
+  return new GatewaySecurityError(
+    "BANDWIDTH_LIMIT",
+    "The gateway bandwidth limit for this plan has been reached.",
+    429,
+  );
+}
+
 export function safeLogDomain(rawUrl: string): string {
   try {
     return new URL(rawUrl).hostname;

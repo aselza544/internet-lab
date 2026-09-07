@@ -3,7 +3,16 @@ const numberFromEnv = (name: string, fallback: number): number => {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
+export type GatewayPlan = "FREE" | "BASIC" | "PRO";
+
+const planFromEnv = (value: string | undefined): GatewayPlan => {
+  const normalized = value?.trim().toUpperCase();
+  return normalized === "BASIC" || normalized === "PRO" ? normalized : "FREE";
+};
+
 export const gatewayConfig = {
+  defaultPlan: planFromEnv(process.env.GATEWAY_DEFAULT_PLAN),
+  dnsTimeoutMs: numberFromEnv("GATEWAY_DNS_TIMEOUT_MS", 2_000),
   timeoutMs: numberFromEnv("GATEWAY_TIMEOUT_MS", 8_000),
   maxResponseBytes: numberFromEnv("GATEWAY_MAX_RESPONSE_BYTES", 1_048_576),
   maxRedirects: numberFromEnv("GATEWAY_MAX_REDIRECTS", 3),

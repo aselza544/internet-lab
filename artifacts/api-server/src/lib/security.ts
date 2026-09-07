@@ -1,5 +1,6 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import { gatewayConfig } from "./gateway-config.ts";
 
 export class GatewaySecurityError extends Error {
   public readonly code: string;
@@ -82,11 +83,41 @@ function isBlockedIpv6(value: string): boolean {
   const isDocumentation = first === 0x2001 && second === 0x0db8;
   const isIpv4Mapped =
     parts.slice(0, 5).every((part) => part === 0) && parts[5] === 0xffff;
+  const isIpv4Compatible =
+    parts.slice(0, 6).every((part) => part === 0) && parts[5] !== 0xffff;
 
   if (isIpv4Mapped) {
     const mappedIpv4 = `${parts[6] >>> 8}.${parts[6] & 255}.${parts[7] >>> 8}.${parts[7] & 255}`;
     return isBlockedIp(mappedIpv4);
   }
+
+  const specialUsePrefixes: Array<[string, number]> = [
+    ["100::", 64], // Discard-only prefix.
+    ["2001:0::", 32], // Teredo.
+    ["2001:2::", 48], // Benchmarking.
+    ["2001:10::", 28], // ORCHID.
+    ["2001:20::", 28], // ORCHIDv2.
+    ["2001:db8::", 32], // Documentation.
+    ["2002::", 16], // 6to4.
+    ["3fff::", 20], // Documentation.
+    ["64:ff9b::", 96], // Well-known NAT64.
+    ["64:ff9b:1::", 48], // Local-use NAT64.
+  ];
+
+  const matchesPrefix = (prefix: string, prefixLength: number): boolean => {
+    const prefixParts = expandIpv6(prefix);
+    if (!prefixParts || prefixParts.length !== 8) return false;
+
+    const fullWords = Math.floor(prefixLength / 16);
+    const remainingBits = prefixLength % 16;
+    for (let index = 0; index < fullWords; index += 1) {
+      if (parts[index] !== prefixParts[index]) return false;
+    }
+    if (remainingBits === 0) return true;
+
+    const mask = (0xffff << (16 - remainingBits)) & 0xffff;
+    return (parts[fullWords] & mask) === (prefixParts[fullWords] & mask);
+  };
 
   return (
     isUnspecified ||
@@ -94,8 +125,55 @@ function isBlockedIpv6(value: string): boolean {
     isUniqueLocal ||
     isLinkLocal ||
     isMulticast ||
-    isDocumentation
+    isDocumentation ||
+    isIpv4Compatible ||
+    specialUsePrefixes.some(([prefix, prefixLength]) =>
+      matchesPrefix(prefix, prefixLength),
+    )
   );
+}
+
+type DnsAddress = { address: string; family: number };
+type DnsLookup = (
+  hostname: string,
+  options: { all: true; verbatim: true },
+) => Promise<DnsAddress[]>;
+
+export function resolveHostname(
+  hostname: string,
+  timeoutMs = gatewayConfig.dnsTimeoutMs,
+  lookup: DnsLookup = (name, options) =>
+    dns.lookup(name, options) as Promise<DnsAddress[]>,
+): Promise<DnsAddress[]> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      reject(
+        new GatewaySecurityError(
+          "DNS_TIMEOUT",
+          "DNS resolution timed out.",
+          504,
+        ),
+      );
+    }, timeoutMs);
+
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback();
+    };
+
+    try {
+      void lookup(hostname, { all: true, verbatim: true }).then(
+        (addresses) => finish(() => resolve(addresses)),
+        (error: unknown) => finish(() => reject(error)),
+      );
+    } catch (error) {
+      finish(() => reject(error));
+    }
+  });
 }
 
 export function isBlockedIp(value: string): boolean {
@@ -188,7 +266,7 @@ export async function validatePublicTarget(
   const addresses =
     directFamily === 4 || directFamily === 6
       ? [{ address: hostname, family: directFamily }]
-      : await dns.lookup(hostname, { all: true, verbatim: true });
+      : await resolveHostname(hostname);
 
   if (
     !addresses.length ||
