@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/security.test.ts src/lib/gateway-upstream.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/security.test.ts src/lib/gateway-upstream.test.ts src/lib/web-proxy.test.ts"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
