@@ -6,25 +6,20 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { AppShell } from '@/components/app-shell';
 import Dashboard from '@/pages/dashboard';
+import WebViewer from '@/pages/web-viewer';
 import Settings from '@/pages/settings';
 import Module from '@/pages/module';
-import {
-  Route,
-  Switch,
-  useLocation,
-  Router as WouterRouter,
-} from 'wouter';
+import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
 const queryClient = new QueryClient();
 
 function Router() {
   return (
-    // Keep a shared shell (sidebar, navbar) outside the boundary so it
-    // survives a page crash.
     <RoutedErrorBoundary>
       <AppShell>
         <Switch>
-          <Route path="/" component={Dashboard} />
+          <Route path="/" component={WebViewer} />
+          <Route path="/dashboard" component={Dashboard} />
           <Route path="/settings" component={Settings} />
           <Route path="/messages"><Module name="messages" /></Route>
           <Route path="/video"><Module name="video" /></Route>
