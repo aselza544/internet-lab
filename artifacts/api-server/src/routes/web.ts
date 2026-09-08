@@ -96,7 +96,8 @@ export function rewriteCss(css: string, base: string): string {
 }
 export function rewriteHtml(html: string, base: string): string {
   let output = html.replace(/<base[^>]*>/gi, "");
-  output = output.replace(/\s(on[a-z]+)\s*=\s*([\"'])[^\"']*\2/gi, "");
+  // Keep inline event handlers: the page already runs inside an opaque-origin sandbox,
+  // and W3Schools-style controls depend on onclick/onload/etc. for normal interaction.
   output = output.replace(/\s(src|href|action|poster|cite)\s*=\s*([\"'])(.*?)\2/gi, (full, attr, quote, value) => { if (/^(data:|blob:|javascript:|mailto:|tel:|#)/i.test(value)) return ` ${attr}=${quote}${value}${quote}`; const proxied = proxyUrl(value, base); return proxied ? ` ${attr}=${quote}${proxied}${quote}` : ""; });
   output = output.replace(/\s(srcset)\s*=\s*([\"'])(.*?)\2/gi, (full, attr, quote, value) => { const rewritten = value.split(",").map((part: string) => { const pieces = part.trim().split(/\s+/); const proxied = proxyUrl(pieces[0], base); if (!proxied) return ""; pieces[0] = proxied; return pieces.join(" "); }).filter(Boolean).join(", "); return ` ${attr}=${quote}${rewritten}${quote}`; });
   output = output.replace(/<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy[\"']?[^>]*>/gi, "");
