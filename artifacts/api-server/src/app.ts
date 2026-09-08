@@ -28,6 +28,13 @@ app.use(
 );
 app.use(cors());
 app.use(cookieParser());
+app.use(
+  "/api/web/resource",
+  express.raw({
+    type: () => true,
+    limit: "2mb",
+  }),
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
