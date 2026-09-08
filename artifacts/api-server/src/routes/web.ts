@@ -90,7 +90,7 @@ export function rewriteHtml(html: string, base: string): string {
     return ` ${attr}=${quote}${rewritten}${quote}`;
   });
   output = output.replace(/<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy[\"']?[^>]*>/gi, "");
-  const csp = "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'none'; media-src 'self' blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none';";
+  const csp = "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none';";
   return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}">${output}`;
 }
 async function serve(req: Request, res: Response): Promise<void> {
@@ -111,13 +111,20 @@ async function serve(req: Request, res: Response): Promise<void> {
     else if (type === "text/css") body = Buffer.from(rewriteCss(body.toString("utf8"), base));
     const responseSize = body.length;
     recordGatewayRequest({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), hostname: result.target.url.hostname, status: "allowed", statusCode: result.upstream.statusCode, durationMs: now() - started, responseSize, securityDecision: "web-proxy-allowed" });
-    res.status(result.upstream.statusCode).set("Content-Type", type).set("X-Content-Type-Options", "nosniff").set("Content-Security-Policy", type === "text/html" ? "default-src 'none'; frame-ancestors 'none';" : "default-src 'none';").send(body);
+    res.status(result.upstream.statusCode)
+      .set("Content-Type", type)
+      .set("X-Content-Type-Options", "nosniff")
+      .set("Content-Security-Policy", type === "text/html" ? cspHeader() : "default-src 'none';")
+      .send(body);
   } catch (error) {
     settleSessionBandwidth(session.sessionId, reservation, 0);
     const status = error instanceof GatewaySecurityError ? error.status : 502;
     const code = error instanceof GatewaySecurityError ? error.code : "UPSTREAM_FAILED";
     res.status(status).json({ error: error instanceof Error ? error.message : "The upstream request could not be completed safely.", code });
   }
+}
+function cspHeader(): string {
+  return "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
 }
 router.get("/web/page", serve);
 router.get("/web/resource", serve);
