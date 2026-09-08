@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Globe2, LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
 
 export default function WebViewer() {
@@ -6,6 +6,54 @@ export default function WebViewer() {
   const [frameUrl, setFrameUrl] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const onMessage = async (event: MessageEvent) => {
+      if (!frameRef.current?.contentWindow || event.source !== frameRef.current.contentWindow) return;
+      const data = event.data;
+      if (!data || data.__internetLab !== 1 || typeof data.id !== 'string') return;
+      if (!['fetch', 'xhr'].includes(data.type)) return;
+      if (typeof data.url !== 'string' || !data.url.startsWith('/api/web/resource?url=')) return;
+      if (!['GET', 'POST', 'HEAD'].includes(String(data.method).toUpperCase())) return;
+
+      try {
+        const headers = new Headers();
+        if (data.headers && typeof data.headers === 'object') {
+          for (const [name, value] of Object.entries(data.headers as Record<string, unknown>)) {
+            if (typeof value === 'string' && !['cookie', 'host', 'origin', 'referer', 'connection', 'content-length'].includes(name.toLowerCase())) headers.set(name, value);
+          }
+        }
+        const response = await fetch(data.url, {
+          method: String(data.method).toUpperCase(),
+          headers,
+          body: ['GET', 'HEAD'].includes(String(data.method).toUpperCase()) ? undefined : (typeof data.body === 'string' ? data.body : undefined),
+          credentials: 'include',
+        });
+        const buffer = await response.arrayBuffer();
+        const responseHeaders: Record<string, string> = {};
+        response.headers.forEach((value, name) => { responseHeaders[name] = value; });
+        frameRef.current?.contentWindow?.postMessage({
+          __internetLab: 1,
+          id: data.id,
+          ok: true,
+          status: response.status,
+          headers: responseHeaders,
+          body: buffer,
+        }, '*', [buffer]);
+      } catch (err) {
+        frameRef.current?.contentWindow?.postMessage({
+          __internetLab: 1,
+          id: data.id,
+          ok: false,
+          name: 'TypeError',
+          error: err instanceof Error ? err.message : 'Gateway request failed',
+        }, '*');
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
 
   async function ensureSession() {
     const response = await fetch('/api/gateway/sessions', { method: 'POST', credentials: 'include' });
@@ -59,12 +107,12 @@ export default function WebViewer() {
             </button>
           </form>
           {error && <div role="alert" style={{ marginTop: 10, color: 'hsl(var(--destructive))', fontSize: 13 }}>{error}</div>}
-          <div style={{ marginTop: 12, display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, opacity: .65 }}><LockKeyhole size={13} /> JavaScript is enabled only inside the isolated sandbox. External credentials and direct browser connections are not forwarded.</div>
+          <div style={{ marginTop: 12, display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, opacity: .65 }}><LockKeyhole size={13} /> JavaScript is enabled inside an isolated sandbox; dynamic requests are routed through the protected gateway.</div>
         </section>
 
         <section style={{ marginTop: 18, border: '1px solid hsl(var(--border))', borderRadius: 14, overflow: 'hidden', background: 'white', minHeight: 620 }} aria-label="Protected website viewer">
           {frameUrl ? (
-            <iframe title="Protected website" src={frameUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ width: '100%', height: 720, border: 0, display: 'block' }} />
+            <iframe ref={frameRef} title="Protected website" src={frameUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ width: '100%', height: 720, border: 0, display: 'block' }} />
           ) : (
             <div style={{ minHeight: 620, display: 'grid', placeItems: 'center', padding: 32, textAlign: 'center', opacity: .65 }}>
               <div><ShieldCheck size={34} /><h2 style={{ margin: '12px 0 6px' }}>Ready</h2><p style={{ margin: 0 }}>Enter a public website above and press Open.</p></div>
