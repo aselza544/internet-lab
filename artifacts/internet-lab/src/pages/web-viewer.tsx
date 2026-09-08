@@ -59,12 +59,12 @@ export default function WebViewer() {
             </button>
           </form>
           {error && <div role="alert" style={{ marginTop: 10, color: 'hsl(var(--destructive))', fontSize: 13 }}>{error}</div>}
-          <div style={{ marginTop: 12, display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, opacity: .65 }}><LockKeyhole size={13} /> External credentials, cookies, forms, popups and direct browser connections are not forwarded.</div>
+          <div style={{ marginTop: 12, display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, opacity: .65 }}><LockKeyhole size={13} /> JavaScript is enabled only inside the isolated sandbox. External credentials and direct browser connections are not forwarded.</div>
         </section>
 
         <section style={{ marginTop: 18, border: '1px solid hsl(var(--border))', borderRadius: 14, overflow: 'hidden', background: 'white', minHeight: 620 }} aria-label="Protected website viewer">
           {frameUrl ? (
-            <iframe title="Protected website" src={frameUrl} sandbox="allow-same-origin" referrerPolicy="no-referrer" style={{ width: '100%', height: 720, border: 0, display: 'block' }} />
+            <iframe title="Protected website" src={frameUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" style={{ width: '100%', height: 720, border: 0, display: 'block' }} />
           ) : (
             <div style={{ minHeight: 620, display: 'grid', placeItems: 'center', padding: 32, textAlign: 'center', opacity: .65 }}>
               <div><ShieldCheck size={34} /><h2 style={{ margin: '12px 0 6px' }}>Ready</h2><p style={{ margin: 0 }}>Enter a public website above and press Open.</p></div>
