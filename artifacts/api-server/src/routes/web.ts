@@ -57,14 +57,7 @@ function requestBody(req: Request): Buffer | undefined {
   if (!req.body || !Buffer.isBuffer(req.body) || req.body.length === 0) return undefined;
   return req.body;
 }
-async function fetchSafe(
-  rawUrl: string,
-  maxResponseBytes: number,
-  budget: number,
-  method: string,
-  headers: Record<string, string>,
-  body?: Buffer,
-) {
+async function fetchSafe(rawUrl: string, maxResponseBytes: number, budget: number, method: string, headers: Record<string, string>, body?: Buffer) {
   let current = rawUrl;
   let currentMethod = method;
   let currentBody = body;
@@ -76,20 +69,12 @@ async function fetchSafe(
     if (policy.blocked) throw new GatewaySecurityError(policy.code ?? "POLICY_BLOCKED", policy.message ?? "Destination blocked by policy.", 403);
     const remaining = budget - used;
     if (remaining <= 0) throw createBandwidthLimitError();
-    const upstream = await readUpstream(target, Math.min(maxResponseBytes, remaining), {
-      method: currentMethod,
-      headers,
-      body: currentBody,
-    });
+    const upstream = await readUpstream(target, Math.min(maxResponseBytes, remaining), { method: currentMethod, headers, body: currentBody });
     used += upstream.body.length;
     if (isRedirect(upstream.statusCode) && upstream.headers.location) {
       current = resolveRedirectTarget(target.url.toString(), upstream.headers.location, redirects, gatewayConfig.maxRedirects);
       redirects += 1;
-      if (upstream.statusCode === 301 || upstream.statusCode === 302 || upstream.statusCode === 303) {
-        currentMethod = "GET";
-        currentBody = undefined;
-        delete headers["content-type"];
-      }
+      if (upstream.statusCode === 301 || upstream.statusCode === 302 || upstream.statusCode === 303) { currentMethod = "GET"; currentBody = undefined; delete headers["content-type"]; }
       continue;
     }
     return { target, upstream, redirects, used };
@@ -102,28 +87,21 @@ function proxyUrl(raw: string, base: string): string | null {
     return `/api/web/resource?url=${encodeURIComponent(value.toString())}`;
   } catch { return null; }
 }
+function bridgeScript(base: string): string {
+  const safeBase = JSON.stringify(base).replace(/</g, "\\u003c");
+  return `<script>(function(){const B=${safeBase};const P="/api/web/resource?url=";const T=new Set(["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]);function u(x){try{const v=new URL(String(x),B);if(v.protocol!=="http:"&&v.protocol!=="https:")return String(x);return P+encodeURIComponent(v.toString())}catch{return String(x)}}function msg(type,payload){return new Promise((resolve,reject)=>{const id=Math.random().toString(36).slice(2)+Date.now();function on(e){if(e.source!==parent||!e.data||e.data.__internetLab!==1||e.data.id!==id)return;removeEventListener("message",on);e.data.ok?resolve(e.data):reject(Object.assign(new Error(e.data.error||"Gateway request failed"),{name:e.data.name||"TypeError"}))}addEventListener("message",on);parent.postMessage({__internetLab:1,id,type,...payload},"*")})}const ofetch=window.fetch.bind(window);window.fetch=function(input,init){const raw=input instanceof Request?input.url:String(input);const method=(init&&init.method)||(input instanceof Request?input.method:"GET");if(!/^https?:/i.test(raw)&&!raw.startsWith("/")&&!raw.startsWith("."))return ofetch(input,init);const target=u(raw);if(target===raw&&/^https?:/i.test(raw))return ofetch(input,init);const headers={};const h=init&&init.headers;if(h)for(const [k,v] of new Headers(h).entries())headers[k]=v;const body=init&&init.body!==undefined?init.body:(input instanceof Request?null:null);return msg("fetch",{url:target,method:String(method).toUpperCase(),headers,body:typeof body==="string"?body:null}).then(r=>new Response(r.body||null,{status:r.status,headers:r.headers||{}}))};const XO=XMLHttpRequest.prototype.open;const XS=XMLHttpRequest.prototype.send;const XH=XMLHttpRequest.prototype.setRequestHeader;XMLHttpRequest.prototype.open=function(method,url){this.__il={method:String(method).toUpperCase(),url:u(url),headers:{}};return XO.call(this,method,this.__il.url,true)};XMLHttpRequest.prototype.setRequestHeader=function(k,v){if(this.__il)this.__il.headers[k]=v;return XH.call(this,k,v)};XMLHttpRequest.prototype.send=function(body){const x=this.__il;if(!x||!T.has(x.method)||x.url===this.responseURL)return XS.call(this,body);const xhr=this;msg("xhr",{url:x.url,method:x.method,headers:x.headers,body:typeof body==="string"?body:null}).then(r=>{Object.defineProperty(xhr,"status",{value:r.status});Object.defineProperty(xhr,"responseText",{value:r.body||""});Object.defineProperty(xhr,"response",{value:r.body||""});Object.defineProperty(xhr,"readyState",{value:4});xhr.dispatchEvent(new Event("readystatechange"));xhr.dispatchEvent(new Event("load"))}).catch(e=>xhr.dispatchEvent(new ErrorEvent("error",{error:e,message:e.message})))}})();</script>`;
+}
 export function rewriteCss(css: string, base: string): string {
-  return css.replace(/url\(\s*([\"']?)([^\"')]+)\1\s*\)/gi, (full, quote, value) => {
-    const proxied = proxyUrl(value, base); return proxied ? `url(${quote}${proxied}${quote})` : "url()";
-  });
+  return css.replace(/url\(\s*([\"']?)([^\"')]+)\1\s*\)/gi, (full, quote, value) => { const proxied = proxyUrl(value, base); return proxied ? `url(${quote}${proxied}${quote})` : "url()"; });
 }
 export function rewriteHtml(html: string, base: string): string {
   let output = html.replace(/<base[^>]*>/gi, "");
   output = output.replace(/\s(on[a-z]+)\s*=\s*([\"'])[^\"']*\2/gi, "");
-  output = output.replace(/\s(src|href|action|poster|cite)\s*=\s*([\"'])(.*?)\2/gi, (full, attr, quote, value) => {
-    if (/^(data:|blob:|javascript:|mailto:|tel:|#)/i.test(value)) return ` ${attr}=${quote}${value}${quote}`;
-    const proxied = proxyUrl(value, base);
-    return proxied ? ` ${attr}=${quote}${proxied}${quote}` : "";
-  });
-  output = output.replace(/\s(srcset)\s*=\s*([\"'])(.*?)\2/gi, (full, attr, quote, value) => {
-    const rewritten = value.split(",").map((part: string) => {
-      const pieces = part.trim().split(/\s+/); const proxied = proxyUrl(pieces[0], base); if (!proxied) return ""; pieces[0] = proxied; return pieces.join(" ");
-    }).filter(Boolean).join(", ");
-    return ` ${attr}=${quote}${rewritten}${quote}`;
-  });
+  output = output.replace(/\s(src|href|action|poster|cite)\s*=\s*([\"'])(.*?)\2/gi, (full, attr, quote, value) => { if (/^(data:|blob:|javascript:|mailto:|tel:|#)/i.test(value)) return ` ${attr}=${quote}${value}${quote}`; const proxied = proxyUrl(value, base); return proxied ? ` ${attr}=${quote}${proxied}${quote}` : ""; });
+  output = output.replace(/\s(srcset)\s*=\s*([\"'])(.*?)\2/gi, (full, attr, quote, value) => { const rewritten = value.split(",").map((part: string) => { const pieces = part.trim().split(/\s+/); const proxied = proxyUrl(pieces[0], base); if (!proxied) return ""; pieces[0] = proxied; return pieces.join(" "); }).filter(Boolean).join(", "); return ` ${attr}=${quote}${rewritten}${quote}`; });
   output = output.replace(/<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy[\"']?[^>]*>/gi, "");
-  const csp = "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self';";
-  return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}">${output}`;
+  const csp = cspHeader();
+  return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}">${bridgeScript(base)}${output}`;
 }
 async function serve(req: Request, res: Response): Promise<void> {
   const session = requireWebSession(req, res); if (!session) return;
@@ -131,52 +109,28 @@ async function serve(req: Request, res: Response): Promise<void> {
   const rawUrl = typeof req.query.url === "string" ? req.query.url : "";
   if (!rawUrl) { res.status(400).json({ error: "A valid http:// or https:// URL is required.", code: "INVALID_URL" }); return; }
   const method = req.path === "/page" ? "GET" : req.method.toUpperCase();
-  if (!(["GET", "POST", "HEAD"].includes(method))) {
-    res.status(405).json({ error: "Only GET, POST and HEAD are supported by the protected web proxy.", code: "METHOD_NOT_ALLOWED" });
-    return;
-  }
-  const reservation = reserveSessionBandwidth(session.sessionId);
-  if (reservation === null) { res.status(429).json({ error: "This plan has reached its bandwidth limit.", code: "BANDWIDTH_LIMIT" }); return; }
+  if (!( ["GET", "POST", "HEAD"].includes(method) )) { res.status(405).json({ error: "Only GET, POST and HEAD are supported by the protected web proxy.", code: "METHOD_NOT_ALLOWED" }); return; }
+  const reservation = reserveSessionBandwidth(session.sessionId); if (reservation === null) { res.status(429).json({ error: "This plan has reached its bandwidth limit.", code: "BANDWIDTH_LIMIT" }); return; }
   const started = now();
   try {
-    const result = await fetchSafe(
-      rawUrl,
-      session.maxResponseBytes,
-      reservation,
-      method,
-      forwardedRequestHeaders(req),
-      method === "POST" ? requestBody(req) : undefined,
-    );
+    const result = await fetchSafe(rawUrl, session.maxResponseBytes, reservation, method, forwardedRequestHeaders(req), method === "POST" ? requestBody(req) : undefined);
     settleSessionBandwidth(session.sessionId, reservation, result.used);
     const type = result.upstream.headers["content-type"]?.split(";", 1)[0] ?? "application/octet-stream";
     const base = result.target.url.toString();
     let body = result.upstream.body;
     if (type === "text/html" || type === "application/xhtml+xml") body = Buffer.from(rewriteHtml(body.toString("utf8"), base));
     else if (type === "text/css") body = Buffer.from(rewriteCss(body.toString("utf8"), base));
-    const responseSize = body.length;
-    recordGatewayRequest({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), hostname: result.target.url.hostname, status: "allowed", statusCode: result.upstream.statusCode, durationMs: now() - started, responseSize, securityDecision: "web-proxy-allowed" });
-    const contentRange = result.upstream.headers["content-range"];
-    const acceptRanges = result.upstream.headers["accept-ranges"];
-    res.status(result.upstream.statusCode)
-      .set("Content-Type", type)
-      .set("X-Content-Type-Options", "nosniff")
-      .set("Content-Security-Policy", type === "text/html" ? cspHeader() : "default-src 'none';")
-      .set("Cache-Control", "no-store");
-    if (contentRange) res.set("Content-Range", contentRange);
-    if (acceptRanges) res.set("Accept-Ranges", acceptRanges);
+    recordGatewayRequest({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), hostname: result.target.url.hostname, status: "allowed", statusCode: result.upstream.statusCode, durationMs: now() - started, responseSize: body.length, securityDecision: "web-proxy-allowed" });
+    const contentRange = result.upstream.headers["content-range"]; const acceptRanges = result.upstream.headers["accept-ranges"];
+    res.status(result.upstream.statusCode).set("Content-Type", type).set("X-Content-Type-Options", "nosniff").set("Content-Security-Policy", type === "text/html" ? cspHeader() : "default-src 'none';").set("Cache-Control", "no-store");
+    if (contentRange) res.set("Content-Range", contentRange); if (acceptRanges) res.set("Accept-Ranges", acceptRanges);
     if (req.method !== "HEAD") res.send(body); else res.end();
   } catch (error) {
     settleSessionBandwidth(session.sessionId, reservation, 0);
-    const status = error instanceof GatewaySecurityError ? error.status : 502;
-    const code = error instanceof GatewaySecurityError ? error.code : "UPSTREAM_FAILED";
+    const status = error instanceof GatewaySecurityError ? error.status : 502; const code = error instanceof GatewaySecurityError ? error.code : "UPSTREAM_FAILED";
     res.status(status).json({ error: error instanceof Error ? error.message : "The upstream request could not be completed safely.", code });
   }
 }
-function cspHeader(): string {
-  return "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none';";
-}
-router.get("/web/page", serve);
-router.get("/web/resource", serve);
-router.post("/web/resource", serve);
-router.head("/web/resource", serve);
+function cspHeader(): string { return "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'none'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none';"; }
+router.get("/web/page", serve); router.get("/web/resource", serve); router.post("/web/resource", serve); router.head("/web/resource", serve);
 export default router;
