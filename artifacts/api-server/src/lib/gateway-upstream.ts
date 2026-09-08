@@ -11,12 +11,18 @@ import { validatePublicTarget } from "./security.ts";
 export function readUpstream(
   target: Awaited<ReturnType<typeof validatePublicTarget>>,
   maxResponseBytes = gatewayConfig.maxResponseBytes,
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: Buffer;
+  } = {},
 ): Promise<{
   statusCode: number;
   headers: IncomingMessage["headers"];
   body: Buffer;
 }> {
   const transport = target.url.protocol === "https:" ? https : http;
+  const method = options.method ?? "GET";
 
   return new Promise((resolve, reject) => {
     const request = transport.request(
@@ -25,22 +31,24 @@ export function readUpstream(
         hostname: target.url.hostname,
         port: target.url.port || (target.url.protocol === "https:" ? 443 : 80),
         path: `${target.url.pathname || "/"}${target.url.search}`,
-        method: "GET",
+        method,
         headers: {
           accept:
             "text/html, text/plain, application/json, application/xml;q=0.9, */*;q=0.1",
           "user-agent": "Internet-Lab-Gateway/0.1",
+          ...(options.headers ?? {}),
+          ...(options.body ? { "content-length": String(options.body.length) } : {}),
         },
         lookup: (
           _hostname: string,
-          options: { all?: boolean },
+          lookupOptions: { all?: boolean },
           callback: (
             error: NodeJS.ErrnoException | null,
             address: string | Array<{ address: string; family: number }>,
             family?: number,
           ) => void,
         ) => {
-          if (options.all) {
+          if (lookupOptions.all) {
             callback(null, [
               { address: target.address, family: target.family },
             ]);
@@ -84,6 +92,7 @@ export function readUpstream(
       request.destroy(createUpstreamTimeoutError());
     });
     request.on("error", reject);
+    if (options.body && options.body.length > 0) request.write(options.body);
     request.end();
   });
 }
