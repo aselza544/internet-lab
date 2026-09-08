@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Globe2, LockKeyhole, RefreshCw, ShieldCheck } from 'lucide-react';
 
+const MAX_BRIDGE_BODY_BYTES = 2 * 1024 * 1024;
+
 export default function WebViewer() {
   const [url, setUrl] = useState('https://example.com');
   const [frameUrl, setFrameUrl] = useState('');
@@ -15,7 +17,25 @@ export default function WebViewer() {
       if (!data || data.__internetLab !== 1 || typeof data.id !== 'string') return;
       if (!['fetch', 'xhr'].includes(data.type)) return;
       if (typeof data.url !== 'string' || !data.url.startsWith('/api/web/resource?url=')) return;
-      if (!['GET', 'POST', 'HEAD'].includes(String(data.method).toUpperCase())) return;
+
+      const method = String(data.method).toUpperCase();
+      if (!['GET', 'POST', 'HEAD'].includes(method)) return;
+
+      let body: BodyInit | undefined;
+      if (method !== 'GET' && method !== 'HEAD' && data.body != null) {
+        if (typeof data.body === 'string') {
+          if (new TextEncoder().encode(data.body).byteLength > MAX_BRIDGE_BODY_BYTES) return;
+          body = data.body;
+        } else if (data.body instanceof ArrayBuffer) {
+          if (data.body.byteLength > MAX_BRIDGE_BODY_BYTES) return;
+          body = data.body;
+        } else if (ArrayBuffer.isView(data.body)) {
+          if (data.body.byteLength > MAX_BRIDGE_BODY_BYTES) return;
+          body = new Uint8Array(data.body.buffer, data.body.byteOffset, data.body.byteLength);
+        } else {
+          return;
+        }
+      }
 
       try {
         const headers = new Headers();
@@ -25,9 +45,9 @@ export default function WebViewer() {
           }
         }
         const response = await fetch(data.url, {
-          method: String(data.method).toUpperCase(),
+          method,
           headers,
-          body: ['GET', 'HEAD'].includes(String(data.method).toUpperCase()) ? undefined : (typeof data.body === 'string' ? data.body : undefined),
+          body,
           credentials: 'include',
         });
         const buffer = await response.arrayBuffer();
