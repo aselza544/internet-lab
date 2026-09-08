@@ -45,19 +45,51 @@ function rateLimit(sessionId: string): boolean {
   recent.push(now()); rateWindows.set(sessionId, recent); return true;
 }
 function isRedirect(status: number): boolean { return [301,302,303,307,308].includes(status); }
-async function fetchSafe(rawUrl: string, maxResponseBytes: number, budget: number) {
-  let current = rawUrl; let redirects = 0; let used = 0;
+function forwardedRequestHeaders(req: Request): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const name of ["accept", "accept-language", "content-type", "range"]) {
+    const value = req.header(name);
+    if (value) headers[name] = value;
+  }
+  return headers;
+}
+function requestBody(req: Request): Buffer | undefined {
+  if (!req.body || !Buffer.isBuffer(req.body) || req.body.length === 0) return undefined;
+  return req.body;
+}
+async function fetchSafe(
+  rawUrl: string,
+  maxResponseBytes: number,
+  budget: number,
+  method: string,
+  headers: Record<string, string>,
+  body?: Buffer,
+) {
+  let current = rawUrl;
+  let currentMethod = method;
+  let currentBody = body;
+  let redirects = 0;
+  let used = 0;
   while (true) {
     const target = await validatePublicTarget(current);
     const policy = evaluatePolicy(target.url.hostname);
     if (policy.blocked) throw new GatewaySecurityError(policy.code ?? "POLICY_BLOCKED", policy.message ?? "Destination blocked by policy.", 403);
     const remaining = budget - used;
     if (remaining <= 0) throw createBandwidthLimitError();
-    const upstream = await readUpstream(target, Math.min(maxResponseBytes, remaining));
+    const upstream = await readUpstream(target, Math.min(maxResponseBytes, remaining), {
+      method: currentMethod,
+      headers,
+      body: currentBody,
+    });
     used += upstream.body.length;
     if (isRedirect(upstream.statusCode) && upstream.headers.location) {
       current = resolveRedirectTarget(target.url.toString(), upstream.headers.location, redirects, gatewayConfig.maxRedirects);
       redirects += 1;
+      if (upstream.statusCode === 301 || upstream.statusCode === 302 || upstream.statusCode === 303) {
+        currentMethod = "GET";
+        currentBody = undefined;
+        delete headers["content-type"];
+      }
       continue;
     }
     return { target, upstream, redirects, used };
@@ -90,7 +122,7 @@ export function rewriteHtml(html: string, base: string): string {
     return ` ${attr}=${quote}${rewritten}${quote}`;
   });
   output = output.replace(/<meta[^>]+http-equiv\s*=\s*[\"']?content-security-policy[\"']?[^>]*>/gi, "");
-  const csp = "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none';";
+  const csp = "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self';";
   return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}">${output}`;
 }
 async function serve(req: Request, res: Response): Promise<void> {
@@ -98,11 +130,23 @@ async function serve(req: Request, res: Response): Promise<void> {
   if (!rateLimit(session.sessionId)) { res.status(429).json({ error: "This session has reached its request rate limit.", code: "RATE_LIMITED" }); return; }
   const rawUrl = typeof req.query.url === "string" ? req.query.url : "";
   if (!rawUrl) { res.status(400).json({ error: "A valid http:// or https:// URL is required.", code: "INVALID_URL" }); return; }
+  const method = req.path === "/page" ? "GET" : req.method.toUpperCase();
+  if (!(["GET", "POST", "HEAD"].includes(method))) {
+    res.status(405).json({ error: "Only GET, POST and HEAD are supported by the protected web proxy.", code: "METHOD_NOT_ALLOWED" });
+    return;
+  }
   const reservation = reserveSessionBandwidth(session.sessionId);
   if (reservation === null) { res.status(429).json({ error: "This plan has reached its bandwidth limit.", code: "BANDWIDTH_LIMIT" }); return; }
   const started = now();
   try {
-    const result = await fetchSafe(rawUrl, session.maxResponseBytes, reservation);
+    const result = await fetchSafe(
+      rawUrl,
+      session.maxResponseBytes,
+      reservation,
+      method,
+      forwardedRequestHeaders(req),
+      method === "POST" ? requestBody(req) : undefined,
+    );
     settleSessionBandwidth(session.sessionId, reservation, result.used);
     const type = result.upstream.headers["content-type"]?.split(";", 1)[0] ?? "application/octet-stream";
     const base = result.target.url.toString();
@@ -111,11 +155,16 @@ async function serve(req: Request, res: Response): Promise<void> {
     else if (type === "text/css") body = Buffer.from(rewriteCss(body.toString("utf8"), base));
     const responseSize = body.length;
     recordGatewayRequest({ id: crypto.randomUUID(), timestamp: new Date().toISOString(), hostname: result.target.url.hostname, status: "allowed", statusCode: result.upstream.statusCode, durationMs: now() - started, responseSize, securityDecision: "web-proxy-allowed" });
+    const contentRange = result.upstream.headers["content-range"];
+    const acceptRanges = result.upstream.headers["accept-ranges"];
     res.status(result.upstream.statusCode)
       .set("Content-Type", type)
       .set("X-Content-Type-Options", "nosniff")
       .set("Content-Security-Policy", type === "text/html" ? cspHeader() : "default-src 'none';")
-      .send(body);
+      .set("Cache-Control", "no-store");
+    if (contentRange) res.set("Content-Range", contentRange);
+    if (acceptRanges) res.set("Accept-Ranges", acceptRanges);
+    if (req.method !== "HEAD") res.send(body); else res.end();
   } catch (error) {
     settleSessionBandwidth(session.sessionId, reservation, 0);
     const status = error instanceof GatewaySecurityError ? error.status : 502;
@@ -124,8 +173,10 @@ async function serve(req: Request, res: Response): Promise<void> {
   }
 }
 function cspHeader(): string {
-  return "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
+  return "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-src 'self'; child-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none';";
 }
 router.get("/web/page", serve);
 router.get("/web/resource", serve);
+router.post("/web/resource", serve);
+router.head("/web/resource", serve);
 export default router;
