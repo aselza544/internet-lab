@@ -1,0 +1,1 @@
+The next web-proxy fix will forward the real browser User-Agent to upstream sites and allow the JavaScript evaluation mode required by modern sites, while retaining the isolated sandbox and connect-src restrictions.
