@@ -6,7 +6,9 @@ import {
   assertResponseWithinLimit,
   createUpstreamTimeoutError,
 } from "./gateway-guards.ts";
-import { validatePublicTarget } from "./security.ts";
+import {
+  validatePublicTarget,
+} from "./security.ts";
 
 export function readUpstream(
   target: Awaited<ReturnType<typeof validatePublicTarget>>,
@@ -35,6 +37,7 @@ export function readUpstream(
         headers: {
           accept:
             "text/html, text/plain, application/json, application/xml;q=0.9, */*;q=0.1",
+          "accept-encoding": "identity",
           "user-agent": "Internet-Lab-Gateway/0.1",
           ...(options.headers ?? {}),
           ...(options.body ? { "content-length": String(options.body.length) } : {}),
