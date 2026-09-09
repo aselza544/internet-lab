@@ -91,7 +91,9 @@ function bridgeScript(base: string): string {
 export function rewriteCss(css: string, base: string, sessionId?: string, plan?: GatewayPlan): string { return css.replace(/url\(\s*([\"']?)([^\"')]+)\1\s*\)/gi, (full, quote, value) => { const proxied = proxyUrl(value, base, sessionId, plan); return proxied ? `url(${quote}${proxied}${quote})` : "url()"; }); }
 export function rewriteJavaScript(js: string, base: string, sessionId?: string, plan?: GatewayPlan): string {
   const rewriteSpecifier = (value: string): string => proxyUrl(value, base, sessionId, plan) ?? value;
+  const currentModuleUrl = proxyUrl(base, base, sessionId, plan);
   let output = js;
+  if (currentModuleUrl) output = output.replace(/\bimport\.meta\.url\b/g, JSON.stringify(currentModuleUrl));
   output = output.replace(/(\bimport\s*\(\s*)([\"'])([^\"']+)\2(\s*\))/g, (_full, prefix, quote, value, suffix) => `${prefix}${quote}${rewriteSpecifier(value)}${quote}${suffix}`);
   output = output.replace(/(\b(?:import\s+|from\s+))([\"'])([^\"']+)\2/g, (_full, prefix, quote, value) => `${prefix}${quote}${rewriteSpecifier(value)}${quote}`);
   output = output.replace(/(\b(?:new\s+Worker|new\s+SharedWorker|importScripts)\s*\(\s*)([\"'])([^\"']+)\2/g, (_full, prefix, quote, value) => `${prefix}${quote}${rewriteSpecifier(value)}${quote}`);
