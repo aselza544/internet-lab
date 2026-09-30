@@ -162,6 +162,19 @@
 .preview-title { color: hsl(var(--accent)); font: 10px var(--app-font-mono); text-transform: uppercase; letter-spacing: .1em; }
 .preview pre { font: 11px/1.65 var(--app-font-mono); padding: 13px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflow: auto; }
 .preview-meta { display: flex; gap: 12px; color: hsl(42 27% 95% / .5); font: 10px var(--app-font-mono); }
+.web-document { padding: 16px; max-height: 520px; overflow: auto; color: hsl(42 27% 95% / .88); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.web-document h1, .web-document h2, .web-document h3, .web-document h4, .web-document h5, .web-document h6 { color: hsl(42 27% 95%); line-height: 1.2; margin: 0 0 10px; }
+.web-document h1 { font-size: 25px; } .web-document h2 { font-size: 21px; } .web-document h3 { font-size: 18px; }
+.web-document p, .web-document ul, .web-document ol, .web-document blockquote, .web-document table, .web-document pre { margin: 0 0 13px; }
+.web-document ul, .web-document ol { padding-left: 24px; }
+.web-document blockquote { border-left: 3px solid hsl(var(--accent)); padding-left: 12px; color: hsl(42 27% 95% / .65); }
+.web-document table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.web-document th, .web-document td { border: 1px solid hsl(42 27% 95% / .12); padding: 7px 9px; text-align: left; }
+.web-document pre, .web-document code { font-family: var(--app-font-mono); }
+.web-document pre { white-space: pre-wrap; background: hsl(42 27% 95% / .05); border-radius: 7px; padding: 10px; }
+.web-link { border: 0; background: transparent; color: hsl(var(--accent)); padding: 0; text-align: left; font: inherit; text-decoration: underline; text-decoration-color: hsl(var(--accent) / .45); cursor: pointer; }
+.web-link:hover:not(:disabled) { text-decoration-color: hsl(var(--accent)); }
+.web-link:disabled { opacity: .6; }
 .safe-note { display: flex; gap: 8px; align-items: flex-start; color: hsl(42 27% 95% / .5); font-size: 10px; line-height: 1.45; padding: 0 13px 13px; }
 .safe-note svg { color: hsl(var(--accent)); flex: 0 0 auto; margin-top: 1px; }
 .empty-state { padding: 35px 20px; text-align: center; color: hsl(var(--muted-foreground)); }
