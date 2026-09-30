@@ -87,25 +87,13 @@ function renderSafeDocumentNode(
 
     if (!href) return <span key={key}>{children}</span>;
 
-    let absoluteHref: string | null = null;
-    try {
-      const resolved = new URL(href, window.location.href);
-      if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
-        absoluteHref = resolved.toString();
-      }
-    } catch {
-      absoluteHref = null;
-    }
-
-    if (!absoluteHref) return <span key={key}>{children}</span>;
-
     return (
       <button
         key={key}
         type="button"
         className="web-link"
         disabled={navigationPending}
-        onClick={() => onNavigate(absoluteHref as string)}
+        onClick={() => onNavigate(href)}
       >
         {children}
       </button>
