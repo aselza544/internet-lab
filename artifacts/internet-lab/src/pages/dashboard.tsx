@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUpRight, CheckCircle2, Clock3, EyeOff, Globe2, LockKeyhole, RefreshCw, Search, ShieldCheck, Zap } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, CheckCircle2, Clock3, Globe2, LockKeyhole, RefreshCw, Search, ShieldCheck, Zap } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   getGetDashboardSummaryQueryKey,
