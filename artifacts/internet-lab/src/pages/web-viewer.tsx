@@ -77,7 +77,16 @@ export default function WebViewer() {
 
   async function ensureSession() {
     const response = await fetch('/api/gateway/sessions', { method: 'POST', credentials: 'include' });
-    if (!response.ok && response.status !== 429) throw new Error('Gateway session could not be started.');
+    if (!response.ok) {
+      let message = 'Gateway session could not be started.';
+      try {
+        const body = await response.json() as { error?: string };
+        if (body?.error) message = body.error;
+      } catch {
+        // Keep the generic message when the server response is not JSON.
+      }
+      throw new Error(message);
+    }
   }
 
   async function openSite(event: FormEvent) {
