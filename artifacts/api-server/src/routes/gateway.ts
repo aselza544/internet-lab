@@ -256,7 +256,7 @@ router.get("/gateway/status", (_req, res) => {
   res.json(data);
 });
 
-router.post("/gateway/sessions", (_req, res) => {
+router.post("/gateway/sessions", (req, res) => {
   if (process.env.NODE_ENV !== "development") {
     jsonError(
       res,
@@ -269,6 +269,26 @@ router.post("/gateway/sessions", (_req, res) => {
 
   try {
     const plan = gatewayConfig.defaultPlan;
+    const existingClaims = verifySession(req);
+    const existingLimits = existingClaims
+      ? getSessionLimits(existingClaims.sessionId)
+      : null;
+
+    if (
+      existingClaims &&
+      existingLimits &&
+      existingClaims.plan === plan &&
+      existingLimits.plan === plan
+    ) {
+      res.status(200).json({
+        sessionId: existingClaims.sessionId,
+        expiresAt: existingClaims.expiresAt,
+        plan,
+        mode: "development",
+      });
+      return;
+    }
+
     const session = createSessionToken(plan);
     if (
       !registerSession(session.sessionId, plan, session.expiresAt.getTime())
